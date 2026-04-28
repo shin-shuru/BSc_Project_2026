@@ -1,32 +1,29 @@
 import os
 import sys
-import math
 import json
-import time
 import random
 import argparse
+import warnings
 from pathlib import Path
-# d
+
 import numpy as np
 import pandas as pd
 import torch
-import warnings
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
 import trimesh
-import trimesh.repair
 import igl
 from skimage.measure import marching_cubes
+
 
 # =========================
 # Reproducibility
 # =========================
 def seed_all(seed=None, logger=None, verbose=False) -> tuple[torch._C.Generator, np.random.Generator]:
     """
-    Set seed for reproducibility
-    Ref: https://pytorch.org/docs/stable/notes/randomness.html
+    Set seed for reproducibility.
     """
     if seed is None:
         seed = 2024
@@ -60,18 +57,24 @@ MESH_ROOT = SAMPLED_ROOT / "mesh"
 MESH_UTILS_DIR = WORKPLACE_ROOT / "khoa"
 
 sys.path.append(str(MESH_UTILS_DIR))
-import mesh_utils
-from mesh_utils import MeshEvaluator
-from scipy.spatial import KDTree
+import mesh_utils  # noqa: E402
+from mesh_utils import MeshEvaluator  # noqa: E402
 
-## Fix for F1-score
-def fixed_OccNet_CD(pred_pointcloud, gt_pointcloud, pred_normals=None, gt_normals=None,
-                    Fscore_thresholds=np.linspace(1./1000, 1, 1000)):
+
+# =========================
+# Fix for F-score
+# =========================
+def fixed_OccNet_CD(
+    pred_pointcloud,
+    gt_pointcloud,
+    pred_normals=None,
+    gt_normals=None,
+    Fscore_thresholds=np.linspace(1.0 / 1000, 1, 1000),
+):
     """
-    Same idea as mesh_utils.OccNet_CD, but compute F-score from per-point
-    distances instead of from the mean distances.
+    Same idea as mesh_utils.OccNet_CD, but computes F-score from per-point
+    distances instead of scalar mean distances.
     """
-    # GT -> Pred
     completeness_dist, completeness_normals = mesh_utils.distance_p2p(
         points_src=gt_pointcloud,
         normals_src=gt_normals,
@@ -82,7 +85,6 @@ def fixed_OccNet_CD(pred_pointcloud, gt_pointcloud, pred_normals=None, gt_normal
     completeness2 = (completeness_dist ** 2).mean()
     completeness_normals = completeness_normals.mean()
 
-    # Pred -> GT
     accuracy_dist, accuracy_normals = mesh_utils.distance_p2p(
         points_src=pred_pointcloud,
         normals_src=pred_normals,
@@ -93,14 +95,10 @@ def fixed_OccNet_CD(pred_pointcloud, gt_pointcloud, pred_normals=None, gt_normal
     accuracy2 = (accuracy_dist ** 2).mean()
     accuracy_normals = accuracy_normals.mean()
 
-    # Chamfer
     chamferL1 = 0.5 * (completeness + accuracy)
     chamferL2 = 0.5 * (completeness2 + accuracy2)
-
-    # Normal consistency
     normals_correctness = 0.5 * completeness_normals + 0.5 * accuracy_normals
 
-    # Correct F-score: use distance arrays, not scalar means
     recall = mesh_utils.get_threshold_percentage(completeness_dist, Fscore_thresholds)
     precision = mesh_utils.get_threshold_percentage(accuracy_dist, Fscore_thresholds)
 
@@ -110,19 +108,19 @@ def fixed_OccNet_CD(pred_pointcloud, gt_pointcloud, pred_normals=None, gt_normal
         F_scores.append(0.0 if denom == 0 else 2 * p * r / denom)
 
     return {
-        'completeness': completeness,
-        'accuracy': accuracy,
-        'chamfer-L1': chamferL1,
-        'completeness2': completeness2,
-        'accuracy2': accuracy2,
-        'chamfer-L2': chamferL2,
-        'normals completeness': completeness_normals,
-        'normals accuracy': accuracy_normals,
-        'normal consistency': normals_correctness,
-        'f-scores': F_scores,
+        "completeness": completeness,
+        "accuracy": accuracy,
+        "chamfer-L1": chamferL1,
+        "completeness2": completeness2,
+        "accuracy2": accuracy2,
+        "chamfer-L2": chamferL2,
+        "normals completeness": completeness_normals,
+        "normals accuracy": accuracy_normals,
+        "normal consistency": normals_correctness,
+        "f-scores": F_scores,
     }
 
-# overwrite the buggy function from mesh_utils in memory only
+
 mesh_utils.OccNet_CD = fixed_OccNet_CD
 
 
@@ -132,6 +130,7 @@ mesh_utils.OccNet_CD = fixed_OccNet_CD
 if not hasattr(igl, "fast_winding_number_for_meshes"):
     def fast_winding_number_for_meshes(V, F, Q):
         return igl.winding_number(V, F, Q)
+
     igl.fast_winding_number_for_meshes = fast_winding_number_for_meshes
 
 
@@ -151,71 +150,38 @@ class OccupancyDataset(Dataset):
 
 
 # =========================
-# SIREN model
+# ReLU model
 # =========================
-class SineLayer(nn.Module):
-    def __init__(self, in_features, out_features, bias=True, is_first=False, w0=30.0):
-        super().__init__()
-        self.in_features = in_features
-        self.is_first = is_first
-        self.w0 = w0
-        self.linear = nn.Linear(in_features, out_features, bias=bias)
-        self.init_weights()
-
-    def init_weights(self):
-        with torch.no_grad():
-            if self.is_first:
-                self.linear.weight.uniform_(-1 / self.in_features, 1 / self.in_features)
-            else:
-                bound = math.sqrt(6 / self.in_features) / self.w0
-                self.linear.weight.uniform_(-bound, bound)
-
-    def forward(self, x):
-        return torch.sin(self.w0 * self.linear(x))
-
-
-class SirenOccupancyNet(nn.Module):
+class ReLUOccupancyNet(nn.Module):
     def __init__(
         self,
-        in_features=3,
-        hidden_features=128,
-        hidden_layers=3,
-        out_features=1,
-        first_w0=15.0,
-        hidden_w0=15.0
+        in_features: int = 3,
+        hidden_features: int = 128,
+        hidden_layers: int = 5,
+        out_features: int = 1,
     ):
+        """
+        ReLU-based occupancy INR.
+
+        hidden_layers means the number of Linear + ReLU blocks.
+        This matches the original ReLU code where num_layers=5 created
+        five hidden Linear layers followed by one final output layer.
+        """
         super().__init__()
 
-        layers = [
-            SineLayer(
-                in_features,
-                hidden_features,
-                is_first=True,
-                w0=first_w0
-            )
-        ]
+        layers = []
+        last_features = in_features
 
         for _ in range(hidden_layers):
-            layers.append(
-                SineLayer(
-                    hidden_features,
-                    hidden_features,
-                    is_first=False,
-                    w0=hidden_w0
-                )
-            )
+            layers.append(nn.Linear(last_features, hidden_features))
+            layers.append(nn.ReLU(inplace=True))
+            last_features = hidden_features
 
+        layers.append(nn.Linear(last_features, out_features))
         self.net = nn.Sequential(*layers)
-        self.final_linear = nn.Linear(hidden_features, out_features)
-
-        with torch.no_grad():
-            bound = math.sqrt(6 / hidden_features) / hidden_w0
-            self.final_linear.weight.uniform_(-bound, bound)
 
     def forward(self, x):
-        x = self.net(x)
-        x = self.final_linear(x)   # raw logits
-        return x
+        return self.net(x)
 
 
 # =========================
@@ -224,45 +190,80 @@ class SirenOccupancyNet(nn.Module):
 def read_split_file(path: Path) -> list[str]:
     if not path.exists():
         return []
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return [line.strip() for line in f if line.strip()]
 
 
-def get_device() -> torch.device:
+def normalize_case_id(name: str) -> str:
+    stem = Path(name).stem
+    suffixes = ["_Segment_1", "_segment_1", "_mesh", "_predicted_mesh"]
+    for suffix in suffixes:
+        if stem.endswith(suffix):
+            stem = stem[: -len(suffix)]
+    return stem
+
+
+def get_device(device_arg: str | None = None) -> torch.device:
+    if device_arg is not None:
+        return torch.device(device_arg)
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def find_all_npy_files() -> list[Path]:
-    return sorted(NPY_ROOT.rglob("*.npy"))
+def find_all_npy_files(npy_root: Path = NPY_ROOT) -> list[Path]:
+    return sorted(npy_root.rglob("*.npy"))
 
 
-def build_mesh_lookup() -> dict[str, Path]:
+def build_mesh_lookup(mesh_root: Path = MESH_ROOT) -> dict[str, Path]:
     """
-    Builds a lookup from mesh stem -> mesh path.
-    You may need to adjust this if .npy and .stl naming formats differ.
+    Build a lookup from normalized mesh stem to mesh path.
     """
-    mesh_files = sorted(MESH_ROOT.glob("*.stl"))
-    return {p.stem: p for p in mesh_files}
+    mesh_files = sorted(mesh_root.glob("*.stl"))
+    return {normalize_case_id(p.name): p for p in mesh_files}
 
 
 def match_npy_to_mesh(npy_path: Path, mesh_lookup: dict[str, Path]) -> Path | None:
     """
-    Adjust this function if your naming scheme differs.
-
-    Current strategy:
-    - try exact stem match
-    - otherwise try substring containment
+    Match .npy file to .stl mesh using normalized case IDs.
     """
-    stem = npy_path.stem
+    case_id = normalize_case_id(npy_path.name)
 
-    if stem in mesh_lookup:
-        return mesh_lookup[stem]
+    if case_id in mesh_lookup:
+        return mesh_lookup[case_id]
 
-    for mesh_stem, mesh_path in mesh_lookup.items():
-        if stem in mesh_stem or mesh_stem in stem:
-            return mesh_path
+    candidates = [
+        mesh_path
+        for mesh_stem, mesh_path in mesh_lookup.items()
+        if mesh_stem.startswith(case_id) or case_id.startswith(mesh_stem)
+    ]
+
+    if len(candidates) == 1:
+        return candidates[0]
 
     return None
+
+
+def select_npy_files_by_split(
+    npy_files: list[Path],
+    split: str,
+    train_split: Path,
+    val_split: Path,
+    test_split: Path,
+    case_ids: list[str] | None = None,
+) -> list[Path]:
+    if case_ids:
+        allowed = {normalize_case_id(x) for x in case_ids}
+        return [p for p in npy_files if normalize_case_id(p.name) in allowed]
+
+    if split == "all":
+        return npy_files
+
+    split_map = {
+        "train": train_split,
+        "val": val_split,
+        "test": test_split,
+    }
+    allowed = {normalize_case_id(x) for x in read_split_file(split_map[split])}
+    return [p for p in npy_files if normalize_case_id(p.name) in allowed]
 
 
 def load_case(npy_path: Path) -> tuple[np.ndarray, np.ndarray]:
@@ -280,12 +281,10 @@ def train_single_case(
     seed: int,
     case_name: str = "",
     batch_size: int = 2048,
-    lr: float = 5e-5,
-    num_epochs: int = 1000,
-    hidden_features: int = 128,
-    hidden_layers: int = 3,
-    first_w0: float = 15.0,
-    hidden_w0: float = 15.0,
+    lr: float = 5e-4,
+    num_epochs: int = 500,
+    hidden_features: int = 256,
+    hidden_layers: int = 5,
 ):
     torch_gen, _ = seed_all(seed)
 
@@ -298,13 +297,11 @@ def train_single_case(
         generator=torch_gen,
     )
 
-    model = SirenOccupancyNet(
+    model = ReLUOccupancyNet(
         in_features=3,
         hidden_features=hidden_features,
         hidden_layers=hidden_layers,
         out_features=1,
-        first_w0=first_w0,
-        hidden_w0=hidden_w0,
     ).to(device)
 
     criterion = nn.BCEWithLogitsLoss()
@@ -341,15 +338,11 @@ def train_single_case(
 def reconstruct_mesh(
     model: nn.Module,
     device: torch.device,
-    grid_res: int = 128,
+    grid_res: int = 256,
     grid_min: float = -0.5,
     grid_max: float = 0.5,
     grid_batch_size: int = 200000,
 ) -> trimesh.Trimesh:
-    """
-    For 300+ livers, start with 128 or 256.
-    1024 is too expensive for a batch sweep.
-    """
     xs = np.linspace(grid_min, grid_max, grid_res, dtype=np.float32)
     ys = np.linspace(grid_min, grid_max, grid_res, dtype=np.float32)
     zs = np.linspace(grid_min, grid_max, grid_res, dtype=np.float32)
@@ -373,7 +366,7 @@ def reconstruct_mesh(
     voxel_size = (grid_max - grid_min) / (grid_res - 1)
     volume_padded = np.pad(volume, pad_width=1, mode="constant", constant_values=0.0)
 
-    verts, faces, normals, values = marching_cubes(
+    verts, faces, _, _ = marching_cubes(
         volume=volume_padded,
         level=0.5,
         spacing=(voxel_size, voxel_size, voxel_size),
@@ -382,13 +375,13 @@ def reconstruct_mesh(
     verts = verts - np.array([voxel_size, voxel_size, voxel_size], dtype=np.float32)
     verts = verts + np.array([grid_min, grid_min, grid_min], dtype=np.float32)
 
-    # removed 'post-processing step' for fair comparison
-    # 
-    pred_mesh = trimesh.Trimesh(vertices=verts, faces=faces, process=True)
+    # Same as the SIREN style file: no extra repair step here for fair comparison.
+    pred_mesh = trimesh.Trimesh(vertices=verts, faces=faces, process=False)
 
     return pred_mesh
 
-def sanitize_metrics(obj): ### fix for F-score 0/0 = nan error
+
+def sanitize_metrics(obj):
     """
     Recursively replace NaN / inf values with safe Python values.
     """
@@ -414,12 +407,13 @@ def evaluate_case(
     pred_mesh: trimesh.Trimesh,
     gt_mesh_path: Path,
     seed: int,
+    n_cube: int = 256,
 ) -> dict:
     gt_mesh = trimesh.load_mesh(gt_mesh_path, process=False)
 
     mesh_evaluator = MeshEvaluator(
         N_pointcloud=100_000,
-        N_cube=256,
+        N_cube=n_cube,
         min_max_range=[-0.5, 0.5],
         winding_number_threshold=0.5,
         hash_resolution=512,
@@ -443,6 +437,7 @@ def evaluate_case(
     metrics["num_faces"] = int(len(pred_mesh.faces))
 
     return metrics
+
 
 def to_serializable(obj):
     """
@@ -470,6 +465,7 @@ def to_serializable(obj):
     else:
         return obj
 
+
 def save_case_outputs(
     case_dir: Path,
     model: nn.Module,
@@ -488,7 +484,7 @@ def save_case_outputs(
     pred_mesh.export(mesh_path)
     np.save(loss_path, np.array(loss_history, dtype=np.float32))
 
-    with open(metrics_path, "w") as f:
+    with open(metrics_path, "w", encoding="utf-8") as f:
         json.dump(to_serializable(metrics), f, indent=2)
 
 
@@ -502,8 +498,12 @@ def run_one_case(
     lr: float,
     num_epochs: int,
     grid_res: int,
+    grid_batch_size: int,
+    hidden_features: int,
+    hidden_layers: int,
+    n_cube: int,
 ):
-    case_name = npy_path.stem
+    case_name = normalize_case_id(npy_path.name)
     case_dir = output_root / case_name
     case_dir.mkdir(parents=True, exist_ok=True)
 
@@ -518,18 +518,22 @@ def run_one_case(
         batch_size=batch_size,
         lr=lr,
         num_epochs=num_epochs,
+        hidden_features=hidden_features,
+        hidden_layers=hidden_layers,
     )
 
     pred_mesh = reconstruct_mesh(
         model=model,
         device=device,
         grid_res=grid_res,
+        grid_batch_size=grid_batch_size,
     )
 
     metrics = evaluate_case(
         pred_mesh=pred_mesh,
         gt_mesh_path=gt_mesh_path,
         seed=seed,
+        n_cube=n_cube,
     )
 
     metrics["case_name"] = case_name
@@ -537,6 +541,13 @@ def run_one_case(
     metrics["npy_path"] = str(npy_path)
     metrics["gt_mesh_path"] = str(gt_mesh_path)
     metrics["final_loss"] = float(loss_history[-1])
+    metrics["model_type"] = "ReLUOccupancyNet"
+    metrics["hidden_features"] = hidden_features
+    metrics["hidden_layers"] = hidden_layers
+    metrics["lr"] = lr
+    metrics["epochs"] = num_epochs
+    metrics["batch_size"] = batch_size
+    metrics["grid_res"] = grid_res
 
     save_case_outputs(
         case_dir=case_dir,
@@ -549,49 +560,87 @@ def run_one_case(
     return metrics
 
 
-def main(): 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--output_root", type=str, default="/home/bsc18/workplace/Jongwon/outputs/batch_inr_siren_max") ## edit
+# =========================
+# Main
+# =========================
+def main():
+    parser = argparse.ArgumentParser(description="Batch ReLU INR training + mesh evaluation output format")
+
+    parser.add_argument("--npy_root", type=str, default=str(NPY_ROOT))
+    parser.add_argument("--mesh_root", type=str, default=str(MESH_ROOT))
+    parser.add_argument("--output_root", type=str, default="/home/bsc18/workplace/Jaehyeong/outputs/batch_inr_relu_2")
+
+    parser.add_argument("--train_split", type=str, default=str(DATASET_ROOT / "train.txt"))
+    parser.add_argument("--val_split", type=str, default=str(DATASET_ROOT / "val.txt"))
+    parser.add_argument("--test_split", type=str, default=str(DATASET_ROOT / "test.txt"))
+    parser.add_argument("--split", choices=["train", "val", "test", "all"], default="test")
+    parser.add_argument("--case_ids", nargs="*", default=None)
+
     parser.add_argument("--seed", type=int, default=2024)
+    parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--batch_size", type=int, default=2048)
-    parser.add_argument("--lr", type=float, default=5e-5)
-    parser.add_argument("--epochs", type=int, default=1000)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--epochs", type=int, default=600)
+    parser.add_argument("--hidden_features", type=int, default=128)
+    parser.add_argument("--hidden_layers", type=int, default=5)
+
     parser.add_argument("--grid_res", type=int, default=256)
-    parser.add_argument("--limit", type=int, default=None, help="Only run first N cases")
+    parser.add_argument("--grid_batch_size", type=int, default=200000)
+    parser.add_argument("--n_cube", type=int, default=256)
+    parser.add_argument("--limit", type=int, default=None, help="Only run first N matched cases")
+
     args = parser.parse_args()
 
     output_root = Path(args.output_root)
     output_root.mkdir(parents=True, exist_ok=True)
 
-    device = get_device()
+    seed_all(args.seed)
+    device = get_device(args.device)
     print("Using device:", device)
 
-    all_npy_files = find_all_npy_files()
-    mesh_lookup = build_mesh_lookup()
+    npy_root = Path(args.npy_root)
+    mesh_root = Path(args.mesh_root)
+    train_split = Path(args.train_split)
+    val_split = Path(args.val_split)
+    test_split = Path(args.test_split)
 
-    print(f"Found {len(all_npy_files)} npy files")
+    all_npy_files = find_all_npy_files(npy_root)
+    selected_npy_files = select_npy_files_by_split(
+        npy_files=all_npy_files,
+        split=args.split,
+        train_split=train_split,
+        val_split=val_split,
+        test_split=test_split,
+        case_ids=args.case_ids,
+    )
+
+    if args.limit is not None:
+        selected_npy_files = selected_npy_files[: args.limit]
+
+    mesh_lookup = build_mesh_lookup(mesh_root)
+
+    print(f"Found {len(all_npy_files)} total npy files")
+    print(f"Running {len(selected_npy_files)} npy files from split='{args.split}'")
 
     summary_rows = []
+    total_cases = len(selected_npy_files)
 
-    total_cases = len(all_npy_files) if args.limit is None else min(len(all_npy_files), args.limit)
-
-    for i, npy_path in enumerate(tqdm(all_npy_files[:total_cases], desc="Cases", unit="case")):
-        if args.limit is not None and i >= args.limit:
-            break
-
+    for i, npy_path in enumerate(tqdm(selected_npy_files, desc="Cases", unit="case")):
         gt_mesh_path = match_npy_to_mesh(npy_path, mesh_lookup)
+        case_name = normalize_case_id(npy_path.name)
+
         if gt_mesh_path is None:
             print(f"[SKIP] No matching mesh for {npy_path.name}")
             summary_rows.append({
-                "case_name": npy_path.stem,
+                "case_name": case_name,
                 "status": "missing_gt_mesh",
                 "npy_path": str(npy_path),
             })
+            pd.DataFrame(summary_rows).to_csv(output_root / "summary.csv", index=False)
             continue
 
         case_seed = args.seed
-
-        print(f"\n[{i+1}/{total_cases}] {npy_path.name}")
+        print(f"\n[{i + 1}/{total_cases}] {npy_path.name}")
 
         try:
             metrics = run_one_case(
@@ -604,6 +653,10 @@ def main():
                 lr=args.lr,
                 num_epochs=args.epochs,
                 grid_res=args.grid_res,
+                grid_batch_size=args.grid_batch_size,
+                hidden_features=args.hidden_features,
+                hidden_layers=args.hidden_layers,
+                n_cube=args.n_cube,
             )
             metrics["status"] = "ok"
             summary_rows.append(to_serializable(metrics))
@@ -611,7 +664,7 @@ def main():
         except Exception as e:
             print(f"[ERROR] {npy_path.name}: {e}")
             summary_rows.append({
-                "case_name": npy_path.stem,
+                "case_name": case_name,
                 "status": "error",
                 "error": str(e),
                 "npy_path": str(npy_path),
@@ -622,7 +675,7 @@ def main():
         pd.DataFrame(summary_rows).to_csv(output_root / "summary.csv", index=False)
 
     print("\nDone.")
-    print("Summary saved to:", output_root / "_summary.csv")
+    print("Summary saved to:", output_root / "summary.csv")
 
 
 if __name__ == "__main__":

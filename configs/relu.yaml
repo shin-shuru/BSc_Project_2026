@@ -1,0 +1,29 @@
+model:
+  type: relu
+  in_features: 3
+  hidden_features: 128
+  hidden_layers: 5
+  out_features: 1
+
+training:
+  seed: 2024
+  batch_size: 2048
+  lr: 1e-3
+  epochs: 600
+
+reconstruction:
+  grid_res: 256
+  grid_min: -0.5
+  grid_max: 0.5
+  grid_batch_size: 200000
+
+evaluation:
+  n_cube: 256
+  n_pointcloud: 100000
+  hash_resolution: 512
+
+data:
+  split: test
+
+output:
+  run_name: batch_inr_relu
