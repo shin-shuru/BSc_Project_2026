@@ -69,6 +69,19 @@ def run_one_case(
     coords, occ = load_case(npy_path)
 
     model = build_model(config)
+    
+    ### added for meta initialization
+    init_checkpoint = training_cfg.get("init_checkpoint", None)
+
+    if init_checkpoint:
+        ckpt = torch.load(init_checkpoint, map_location=device)
+
+        if "model_state_dict" in ckpt:
+            model.load_state_dict(ckpt["model_state_dict"])
+        else:
+            model.load_state_dict(ckpt)
+
+        print(f"Loaded meta initialization from: {init_checkpoint}")
 
     model, loss_history = train_single_case(
         model=model,
@@ -118,6 +131,9 @@ def run_one_case(
     metrics["epochs"] = training_cfg.get("epochs")
     metrics["batch_size"] = training_cfg.get("batch_size")
     metrics["grid_res"] = recon_cfg.get("grid_res")
+    
+    metrics["init_type"] = training_cfg.get("init_type", "random") ### for comparing random vs meta init
+    metrics["init_checkpoint"] = training_cfg.get("init_checkpoint", "") ### "" ""
 
     save_case_outputs(
         case_dir=case_dir,

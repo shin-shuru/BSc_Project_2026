@@ -11,7 +11,7 @@ training:
   seed: 2024
   batch_size: 2048
   lr: 0.00005
-  epochs: 1000
+  epochs: 200
 
 reconstruction:
   grid_res: 256
