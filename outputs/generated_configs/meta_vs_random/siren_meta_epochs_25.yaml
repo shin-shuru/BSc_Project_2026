@@ -1,0 +1,29 @@
+model:
+  type: siren
+  in_features: 3
+  hidden_features: 128
+  hidden_layers: 3
+  out_features: 1
+  first_w0: 15.0
+  hidden_w0: 10.0
+training:
+  seed: 2024
+  batch_size: 2048
+  lr: 5.0e-05
+  epochs: 25
+  init_type: meta
+  init_checkpoint: outputs/meta/meta_siren_1/meta_init.pt
+reconstruction:
+  grid_res: 256
+  grid_min: -0.5
+  grid_max: 0.5
+  grid_batch_size: 200000
+evaluation:
+  n_cube: 256
+  n_pointcloud: 100000
+  hash_resolution: 512
+data:
+  split: test
+output:
+  run_name: siren_meta_epochs_25
+  output_root: /home/bsc18/workplace/Jongwon/liver_inr_reconstruction/outputs/meta_vs_random_comparison/siren_meta_epochs_25

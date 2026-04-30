@@ -10,15 +10,6 @@ except ImportError:
 
 
 class LiverMAML:
-    """
-    MAML trainer for occupancy INR.
-
-    alpha = inner-loop learning rate
-    beta = outer-loop/meta learning rate
-    k_support = number of points for adaptation
-    k_query = number of points for meta-loss
-    num_metatasks = tasks per meta-iteration
-    """
 
     def __init__(
         self,
@@ -93,7 +84,7 @@ class LiverMAML:
             self.meta_optimizer.zero_grad(set_to_none=True)
 
             meta_loss = 0.0
-
+            # 1: Need large num_iterations to cover all the cases of the training set
             for _ in range(self.num_metatasks):
                 task = self.task_distribution.sample_task()
                 task_loss = self.inner_loop(task)
@@ -101,13 +92,21 @@ class LiverMAML:
 
             meta_loss = meta_loss / self.num_metatasks
             meta_loss.backward()
+            
+            # 2 Cover all the training set but need to tune to num_metatasks to adapt/fit with the GPU VRAM
+            for batch in trainingset # fix it; 
+                for _ in range(self.num_metatasks):
+                    task = self.task_distribution.sample_task()
+                    task_loss = self.inner_loop(task)
+                    meta_loss = meta_loss + task_loss
 
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                meta_loss = meta_loss / self.num_metatasks
+                meta_loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                self.meta_optimizer.step()
 
-            self.meta_optimizer.step()
-
-            loss_value = float(meta_loss.detach().cpu())
-            self.meta_losses.append(loss_value)
+                loss_value = float(meta_loss.detach().cpu())
+                self.meta_losses.append(loss_value)
 
             if iteration % print_every == 0:
                 print(f"[{iteration}/{num_iterations}] meta_loss={loss_value:.6f}")

@@ -19,21 +19,26 @@ class LiverTask:
 
         self.inside_idx = np.where(self.occ >= 0.5)[0]
         self.outside_idx = np.where(self.occ < 0.5)[0]
+    
+    
+    # for batch in range(dataloader(batch_size=2))
+    def __len__(self):
+        return len(self.coords)
 
     def sample_data(self, size: int, device: torch.device):
-        if self.balanced and len(self.inside_idx) > 0 and len(self.outside_idx) > 0:
-            n_inside = size // 2
-            n_outside = size - n_inside
+        # if self.balanced and len(self.inside_idx) > 0 and len(self.outside_idx) > 0:
+        #     n_inside = size // 2
+        #     n_outside = size - n_inside
 
-            idx_inside = np.random.choice(self.inside_idx, n_inside, replace=True)
-            idx_outside = np.random.choice(self.outside_idx, n_outside, replace=True)
-            idx = np.concatenate([idx_inside, idx_outside])
-            np.random.shuffle(idx)
-        else:
-            idx = np.random.choice(len(self.coords), size, replace=True)
+        #     idx_inside = np.random.choice(self.inside_idx, n_inside, replace=True)
+        #     idx_outside = np.random.choice(self.outside_idx, n_outside, replace=True)
+        #     idx = np.concatenate([idx_inside, idx_outside])
+        #     np.random.shuffle(idx)
+        # else:
+        #     idx = np.random.choice(len(self.coords), size, replace=True)
 
-        x = torch.from_numpy(self.coords[idx]).float().to(device)
-        y = torch.from_numpy(self.occ[idx]).float().unsqueeze(1).to(device)
+        x = torch.from_numpy(self.coords).float().to(device)
+        y = torch.from_numpy(self.occ).float().unsqueeze(1).to(device)
 
         return x, y
 
