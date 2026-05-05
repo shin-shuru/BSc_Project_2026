@@ -77,6 +77,7 @@ class LiverMAML:
 
         return query_loss
 
+    # 여기 (아마도) meta-learning loop; 서버 사양 봐가면서 조정해보기
     def outer_loop(self, num_iterations: int, print_every: int = 10):
         self.model.train()
 

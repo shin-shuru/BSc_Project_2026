@@ -21,16 +21,17 @@ class LiverTask:
         self.outside_idx = np.where(self.occ < 0.5)[0]
     
     
-    # for batch in range(dataloader(batch_size=2))
+    # 예시로: for batch in range(dataloader(batch_size=2))
     def __len__(self):
         return len(self.coords)
 
+    #대충 콰가 말한것: pytorch에 이미 다 built-in 된 dataloader 있어서, 이렇게 어렵게 안해도됨. 밑에 comment 된건 불필요한거라한듯
     def sample_data(self, size: int, device: torch.device):
         # if self.balanced and len(self.inside_idx) > 0 and len(self.outside_idx) > 0:
         #     n_inside = size // 2
         #     n_outside = size - n_inside
 
-        #     idx_inside = np.random.choice(self.inside_idx, n_inside, replace=True)
+        #     idx_inside = np.random.choice(self.inside_idx, n_inside, replace=True) <--training 넣을때 random인게 문제; 바꿔야됨
         #     idx_outside = np.random.choice(self.outside_idx, n_outside, replace=True)
         #     idx = np.concatenate([idx_inside, idx_outside])
         #     np.random.shuffle(idx)
