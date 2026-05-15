@@ -1,2 +1,6 @@
+outputs/
+*.pt
+*.npy
+*.stl
 __pycache__/
 *.pyc

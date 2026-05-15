@@ -1,0 +1,47 @@
+model:
+  type: siren
+  in_features: 3
+  hidden_features: 128
+  hidden_layers: 3
+  out_features: 1
+  first_w0: 15.0
+  hidden_w0: 15.0
+
+meta_checkpoint:
+  path: outputs/meta_runs/meta_siren_sequential_jaehyeong_w0_35/checkpoints/meta_model_final.pt
+
+training:
+  seed: 2024
+  batch_size: 2048
+  lr: 0.00005
+
+  # Train once until this maximum epoch.
+  # Meta init will be evaluated at intermediate epochs.
+  # Random init will be evaluated only at the final/random_eval_epochs.
+  epochs: 600
+
+  num_workers: 0
+
+reconstruction:
+  grid_res: 256
+  grid_min: -0.5
+  grid_max: 0.5
+  grid_batch_size: 200000
+
+evaluation:
+  # Meta-INR: exact epochs to extract from one continuous adaptation run.
+  meta_eval_epochs: [0, 1, 2, 3, 5, 10, 15, 20, 30, 40, 50, 70, 100, 150, 200, 300]
+
+  # Random INR: evaluate only the final/reference result.
+  # Keep this as [600] if the random baseline should be the final 600-epoch INR.
+  random_eval_epochs: [600]
+
+  n_cube: 256
+  n_pointcloud: 100000
+  hash_resolution: 512
+
+data:
+  split: valid
+
+output:
+  run_name: siren_meta_vs_random_single_run

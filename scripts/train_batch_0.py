@@ -69,70 +69,6 @@ def run_one_case(
     coords, occ = load_case(npy_path)
 
     model = build_model(config)
-    
-    ### added for meta initialization
-    init_checkpoint = training_cfg.get("init_checkpoint", None)
-
-    if init_checkpoint:
-        ckpt = torch.load(init_checkpoint, map_location=device)
-
-        if "model_state_dict" in ckpt:
-            model.load_state_dict(ckpt["model_state_dict"])
-        else:
-            model.load_state_dict(ckpt)
-
-        print(f"Loaded meta initialization from: {init_checkpoint}")
-
-    checkpoint_epochs = training_cfg.get("checkpoint_epochs", [])
-    epoch_eval_rows = []
-
-    def evaluate_epoch_checkpoint(epoch: int, current_model, current_loss_history):
-        pred_mesh_epoch = reconstruct_mesh(
-            model=current_model,
-            device=device,
-            grid_res=recon_cfg.get("grid_res", 256),
-            grid_min=recon_cfg.get("grid_min", -0.5),
-            grid_max=recon_cfg.get("grid_max", 0.5),
-            grid_batch_size=recon_cfg.get("grid_batch_size", 200_000),
-        )
-
-        epoch_dir = case_dir / "epoch_evaluations" / f"epoch_{epoch:04d}"
-        epoch_dir.mkdir(parents=True, exist_ok=True)
-        pred_mesh_epoch.export(epoch_dir / "pred_mesh.stl")
-        
-        epoch_metrics = evaluate_case(
-            pred_mesh=pred_mesh_epoch,
-            gt_mesh_path=gt_mesh_path,
-            seed=seed,
-            n_cube=eval_cfg.get("n_cube", 256),
-            n_pointcloud=eval_cfg.get("n_pointcloud", 100_000),
-            hash_resolution=eval_cfg.get("hash_resolution", 512),
-        )
-
-        epoch_metrics["case_name"] = case_name
-        epoch_metrics["epoch"] = epoch
-        epoch_metrics["seed"] = seed
-        epoch_metrics["npy_path"] = str(npy_path)
-        epoch_metrics["gt_mesh_path"] = str(gt_mesh_path)
-        epoch_metrics["final_loss"] = float(current_loss_history[-1])
-
-        epoch_metrics["model_type"] = model_cfg["type"]
-        epoch_metrics["hidden_features"] = model_cfg.get("hidden_features")
-        epoch_metrics["hidden_layers"] = model_cfg.get("hidden_layers")
-
-        if model_cfg["type"].lower() == "siren":
-            epoch_metrics["first_w0"] = model_cfg.get("first_w0")
-            epoch_metrics["hidden_w0"] = model_cfg.get("hidden_w0")
-
-        epoch_metrics["lr"] = training_cfg.get("lr")
-        epoch_metrics["epochs"] = training_cfg.get("epochs")
-        epoch_metrics["batch_size"] = training_cfg.get("batch_size")
-        epoch_metrics["grid_res"] = recon_cfg.get("grid_res")
-        epoch_metrics["init_type"] = training_cfg.get("init_type", "random")
-        epoch_metrics["init_checkpoint"] = training_cfg.get("init_checkpoint", "")
-
-        epoch_eval_rows.append(to_serializable(epoch_metrics))
-        pd.DataFrame(epoch_eval_rows).to_csv(case_dir / "epoch_metrics.csv", index=False)
 
     model, loss_history = train_single_case(
         model=model,
@@ -144,9 +80,6 @@ def run_one_case(
         batch_size=training_cfg.get("batch_size", 2048),
         lr=training_cfg.get("lr", 1e-3),
         num_epochs=training_cfg.get("epochs", 600),
-        checkpoint_epochs=checkpoint_epochs,
-        checkpoint_dir=case_dir / "epoch_checkpoints",
-        checkpoint_callback=evaluate_epoch_checkpoint,
     )
 
     pred_mesh = reconstruct_mesh(
@@ -185,9 +118,6 @@ def run_one_case(
     metrics["epochs"] = training_cfg.get("epochs")
     metrics["batch_size"] = training_cfg.get("batch_size")
     metrics["grid_res"] = recon_cfg.get("grid_res")
-    
-    metrics["init_type"] = training_cfg.get("init_type", "random") ### for comparing random vs meta init
-    metrics["init_checkpoint"] = training_cfg.get("init_checkpoint", "") ### "" ""
 
     save_case_outputs(
         case_dir=case_dir,

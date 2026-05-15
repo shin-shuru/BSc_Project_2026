@@ -1,0 +1,43 @@
+model:
+  type: relu
+  in_features: 3
+  hidden_features: 128
+  hidden_layers: 3
+  out_features: 1
+
+meta:
+  seed: 2024
+  split: train
+
+  # Inner-loop learning rate.
+  # ReLU usually tolerates a higher LR than SIREN.
+  alpha: 0.0005
+
+  # Outer-loop/meta learning rate.
+  beta: 0.00005
+
+  k_support: 16384
+  k_query: all
+
+  # Start slightly safer first.
+  # You can increase after checking memory.
+  num_metatasks: 12
+
+  inner_steps: 4
+  first_order: false
+
+  task_sampling: sequential
+  balanced: false
+  preload_tasks: false
+
+  num_iterations: 50000
+  print_every: 50
+  log_every: 10
+  checkpoint_every: 500
+
+data:
+  split: train
+
+output:
+  run_name: meta_relu_sequential_7
+

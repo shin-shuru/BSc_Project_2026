@@ -1,0 +1,113 @@
+model:
+  # selects which model is being used. ReLU has slightly different configs, 
+  # refer to the meta_relu_sequential.yaml file if needed.
+  type: siren
+
+  # number of input coordinates, since it is (x, y, z), 3 input features are used.
+  in_features: 3
+
+  # width of each hidden layer in model. Higher value increases memory use.
+  # Do not change, but if you do, evaluation must also have values changed.
+  hidden_features: 128
+
+  # Number of hidden layers (excluding input layer)
+  hidden_layers: 3
+
+  # model outputs one value per coordinate (0 or 1 occupancy value)
+  out_features: 1
+
+  # low w0 values: stable but lose detail
+  # high w0 values: more detail but unstable / noisy
+  # safe range between 10~30. I think 15 works good for this task, but idk, who knows.
+  first_w0: 15.0
+  hidden_w0: 15.0
+
+meta:
+  # random seed setting. don't touch
+  seed: 2024
+  
+  # uses data from the training set
+  split: train
+
+  # Inner loop learning rate.
+  # safe range i think around 1e-4 to 1e-5 is safe
+  alpha: 0.0005
+
+  # Outer loop/meta learning rate.
+  # always alpha > beta. safe bet is around alpha / 10 = beta
+  beta: 0.00005
+
+  # Points sampled from each liver for inner-loop adaptation.
+  # Remember, each liver data has 40 000 points.
+  # e.g. if k_support: 4000, it only takes 10% of the points to train.
+  # Higher k_support is ideal (all), but increases memory use directly.
+  k_support: all
+
+  # Points sampled from each liver for query/meta-loss.
+  # It is how many points are used to evaluate the meta loss. 
+  # Same pros & cons with k-support
+  k_query: all
+
+  # Number of liver tasks contributing to one outer-loop meta-update.
+  # Increase this gradually after confirming memory usage.
+  num_metatasks: 12
+
+  # Number of gradient steps in the inner loop.
+  # Can try 1-3. lower inner step = lower memory use
+  inner_steps: 2
+
+  # false = full MAML, higher memory
+  # true = first-order MAML, lower memory
+  first_order: false
+
+  # sequential = shuffled no-replacement task coverage
+  # random = old behavior, with replacement
+  # don't touch
+  task_sampling: sequential
+
+  # Balanced point sampling inside each liver.
+  # don't touch
+  balanced: false
+
+  # false = load tasks lazily, safer RAM usage
+  # true = preload all livers into CPU RAM
+  # don't touch
+  preload_tasks: false
+
+  # number of outer layer iterations (aka epochs)
+  num_iterations: 10000
+
+# each describes how often the training process is:
+  # printed: shows you current progress in the terminal
+  print_every: 50
+  # logged: how often it is logged
+  log_every: 50
+  # saved: how often checkpoints are saved
+  checkpoint_every: 50
+  # print_every, log_every, checkpoint_every recommended to have same values.
+  # suggested: 0.1-1% of num_iterations
+
+
+data:
+  split: train
+
+output:
+  # will save in outputs/meta_runs/meta_siren_sequential_jaehyeong_x
+  # change the name for different runs;
+  # if same name is used, it will overwrite and DELETE previous run data
+  # !!! always make sure config file is SAVED before running !!!
+  # example: for a second run, change name to: meta_siren_sequential_yuki_2
+  run_name: meta_siren_sequential_yuki_x
+
+# recommended things to play around with:
+# learning rates: alpha, beta
+  # this doesn't affect memory use or runtime
+# k_support & k_query
+# num_metatasks
+# inner step
+# num_iteration & _every
+  #  this doesn't affect memory use, only total runtime
+
+####### use the following command to run ########
+# this uses GPU #1
+# CUDA_VISIBLE_DEVICES=1 python scripts/train_meta.py --config configs/meta_siren_sequential_yuki.yaml --device cuda

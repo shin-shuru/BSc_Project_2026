@@ -1,17 +1,20 @@
 model:
   type: siren
   in_features: 3
-  hidden_features: 256
+  hidden_features: 128
   hidden_layers: 3
   out_features: 1
-  first_w0: 15.0
-  hidden_w0: 15.0
+  first_w0: 35.0
+  hidden_w0: 35.0
 
 training:
   seed: 2024
   batch_size: 2048
   lr: 0.00005
   epochs: 200
+  checkpoint_epochs: [1, 2, 5, 10, 25, 50, 100, 200]
+  init_type: meta
+  init_checkpoint: outputs/meta_runs/meta_siren_sequential_jaehyeong_w0_35/checkpoints/meta_model_final.pt
 
 reconstruction:
   grid_res: 256
@@ -25,7 +28,7 @@ evaluation:
   hash_resolution: 512
 
 data:
-  split: test
+  split: val
 
 output:
-  run_name: batch_inr_siren
+  run_name: val_meta_w0_35

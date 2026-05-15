@@ -1,0 +1,46 @@
+model:
+  type: softplus_pe
+  in_features: 3
+  hidden_features: 128
+  hidden_layers: 4
+  out_features: 1
+
+  # Same fixed sinusoidal positional encoding used by ReLU+PE.
+  # Input dim becomes 3 + 2 * num_frequencies * 3 when include_input is true.
+  num_frequencies: 6
+  include_input: true
+  log_sampling: true
+  pe_scale: 1.0
+
+  # Smooth activation. Higher beta is closer to ReLU; lower beta is smoother.
+  softplus_beta: 5.0
+  softplus_threshold: 20.0
+
+meta:
+  seed: 2024
+  split: train
+
+  alpha: 0.0005
+  beta: 0.00005
+
+  k_support: all
+  k_query: all
+
+  num_metatasks: 12
+  inner_steps: 2
+  first_order: false
+
+  task_sampling: sequential
+  balanced: false
+  preload_tasks: false
+
+  num_iterations: 50000
+  print_every: 50
+  log_every: 10
+  checkpoint_every: 500
+
+data:
+  split: train
+
+output:
+  run_name: meta_softplus_pe_sequential_1
